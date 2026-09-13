@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { looksLikePactContract, parsePactContract, findPactIssues, type PactContract, type PactFinding } from './pactFile';
+import { recordHit } from './reviewPrompt';
 
 const DEFAULT_GLOB = '**/pacts/**/*.json';
 
@@ -33,8 +34,18 @@ class PactTreeProvider implements vscode.TreeDataProvider<Node> {
   readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
   private contracts: LoadedContract[] = [];
 
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
   async refresh(glob: string): Promise<void> {
     this.contracts = await loadContracts(glob);
+    // Real findings actually surfaced in the tree -- dedup'd by file URI
+    // + finding index so re-scanning on every watcher refresh doesn't
+    // inflate the count towards the review prompt.
+    for (const contract of this.contracts) {
+      contract.findings.forEach((finding, index) => {
+        recordHit(this.context, `${contract.uri.toString()}:${index}:${finding.kind}:${finding.description}`);
+      });
+    }
     this.onDidChangeTreeDataEmitter.fire();
   }
 
@@ -71,7 +82,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const config = vscode.workspace.getConfiguration('pactContractCompanion');
   const glob = config.get<string>('contractGlob', DEFAULT_GLOB);
 
-  const provider = new PactTreeProvider();
+  const provider = new PactTreeProvider(context);
   const treeView = vscode.window.createTreeView('pactContractCompanion.contracts', { treeDataProvider: provider });
   context.subscriptions.push(treeView);
 
